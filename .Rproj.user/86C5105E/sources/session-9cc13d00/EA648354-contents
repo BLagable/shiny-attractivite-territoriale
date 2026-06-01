@@ -1,0 +1,494 @@
+# =============================================================================
+# Application Shiny — Attractivité entrepreneuriale des zones d'emploi françaises
+# Auteur : Benjamin Lagable
+# Méthode : ACP par dimension + moyenne simple (OCDE/JRC 2008)
+# =============================================================================
+
+library(openxlsx)
+library(sf)
+library(dplyr)
+library(readxl)
+library(shiny)
+library(shinyjs)
+library(leaflet)
+library(ggplot2)
+
+# -----------------------------------------------------------------------------
+# 0. Chargement et jointure
+# -----------------------------------------------------------------------------
+
+fond_carte_ze2020 <- st_read("data/ze2020_2024.shp") %>%
+  rename(ZE2020 = ze2020, LIBZE2020 = libze2020)
+
+data_scores <- readxl::read_xlsx("data/data_scores_ACP.xlsx") %>%
+  mutate(ZE2020 = as.character(ZE2020))
+
+fond_carte_data <- fond_carte_ze2020 %>%
+  mutate(ZE2020 = as.character(ZE2020)) %>%
+  left_join(data_scores %>% select(-LIBZE2020), by = "ZE2020")
+
+# -----------------------------------------------------------------------------
+# 1. Constantes
+# -----------------------------------------------------------------------------
+
+labels_sous_indices <- c(
+  "score_global"                           = "Indice global d'attractivité",
+  "score_dynamisme_economique_emploi"      = "Dynamisme économique et emploi",
+  "score_fiscalite_ressources_publiques"   = "Fiscalité et ressources publiques",
+  "score_capital_humain_education"         = "Capital humain et éducation",
+  "score_services_equipements_qualite_vie" = "Services, équipements et qualité de vie",
+  "score_demographie_structure_sociale"    = "Démographie et structure sociale",
+  "score_logement_cadre_residentiel"       = "Logement et cadre résidentiel",
+  "score_environnement_risques"            = "Environnement et risques",
+  "score_infrastructures_numeriques"       = "Infrastructures numériques",
+  "score_mobilite_accessibilite"           = "Mobilité et accessibilité"
+)
+
+labels_radar <- c(
+  "score_dynamisme_economique_emploi"      = "Dynamisme\néconomique",
+  "score_fiscalite_ressources_publiques"   = "Fiscalité &\nressources",
+  "score_capital_humain_education"         = "Capital\nhumain",
+  "score_services_equipements_qualite_vie" = "Services &\nqualité de vie",
+  "score_demographie_structure_sociale"    = "Démographie",
+  "score_logement_cadre_residentiel"       = "Logement",
+  "score_environnement_risques"            = "Environnement\n& risques",
+  "score_infrastructures_numeriques"       = "Infra.\nnumériques",
+  "score_mobilite_accessibilite"           = "Mobilité &\naccessibilité"
+)
+
+cols_dim <- names(labels_radar)
+
+descriptions <- list(
+  "score_global"                           = "Score global d'attractivité entrepreneuriale — moyenne simple des 9 dimensions (OCDE/JRC 2008). Scores normalisés 0-100.",
+  "score_dynamisme_economique_emploi"      = "Mesure l'activité économique locale, l'emploi, les revenus et la structure sectorielle du territoire.",
+  "score_fiscalite_ressources_publiques"   = "Évalue la pression fiscale locale, les dépenses d'équipement des collectivités et les aides publiques.",
+  "score_capital_humain_education"         = "Reflète le niveau de formation de la population et l'accès aux établissements d'enseignement supérieur.",
+  "score_services_equipements_qualite_vie" = "Mesure la richesse de l'offre locale en services, équipements culturels, sportifs et de santé.",
+  "score_demographie_structure_sociale"    = "Analyse la structure démographique, la densité et la participation civique.",
+  "score_logement_cadre_residentiel"       = "Évalue la structure du parc de logements, le poids du logement social et le niveau des loyers.",
+  "score_environnement_risques"            = "Prend en compte les risques naturels et industriels, la qualité environnementale et l'artificialisation.",
+  "score_infrastructures_numeriques"       = "Mesure la couverture numérique : fibre optique, 4G et vitesse internet.",
+  "score_mobilite_accessibilite"           = "Évalue l'accessibilité du territoire, les transports et les temps de trajet domicile-travail."
+)
+
+corr_creations <- sapply(names(labels_sous_indices), function(col) {
+  if (col %in% colnames(data_scores) && "nombre_creations" %in% colnames(data_scores)) {
+    round(cor(data_scores[[col]], data_scores$nombre_creations, use = "complete.obs"), 3)
+  } else { NA }
+})
+
+# -----------------------------------------------------------------------------
+# 2. UI
+# -----------------------------------------------------------------------------
+
+ui <- fluidPage(
+  useShinyjs(),
+
+  tags$head(tags$style(HTML("
+    body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f5f5f5; }
+    .sidebar-panel { background: white; border-radius: 8px; padding: 18px;
+                     box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+    .score-box { background: #f0f8ff; padding: 12px 16px; border-radius: 8px;
+                 border: 1px solid #cde; margin: 10px 0; }
+    .score-value { font-size: 30px; font-weight: 700; color: #0073e6; }
+    .corr-box { background: #f8f9fa; padding: 10px 14px; border-radius: 6px;
+                border: 1px solid #dee2e6; margin: 8px 0; font-size: 13px; }
+    .corr-positive { color: #155724; font-weight: 600; }
+    .corr-negative { color: #721c24; font-weight: 600; }
+    .corr-neutral   { color: #856404; font-weight: 600; }
+    .description-box { background: #fafafa; padding: 10px 14px;
+                        border-left: 4px solid #0073e6; border-radius: 4px;
+                        font-style: italic; color: #555; font-size: 13px; margin: 8px 0; }
+    .warning-box { background: #fff8e1; border-left: 4px solid #ffc107;
+                   padding: 10px 14px; border-radius: 4px;
+                   font-size: 13px; color: #5d4037; margin: 10px 0; }
+    .section-box { background: white; border-radius: 8px; padding: 16px;
+                   box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 16px; }
+    .methodologie-section { background: white; border-radius: 8px; padding: 24px;
+                             box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+    .methodologie-section h4 { color: #0073e6; border-bottom: 1px solid #eee;
+                                padding-bottom: 6px; }
+    .note-methodo { font-size: 11px; color: #777; border-left: 3px solid #4a90d9;
+                    padding-left: 9px; margin-top: 8px; line-height: 1.5; }
+    h4 { color: #1a1a2e; margin-top: 14px; font-size: 14px; }
+    .nav-tabs > li.active > a { color: #0073e6; font-weight: bold; }
+  "))),
+
+  titlePanel(
+    div(style = "padding: 8px 0 4px 0;",
+      h2("Attractivité entrepreneuriale des zones d'emploi françaises",
+         style = "color:#1a1a2e; font-weight:700; margin-bottom:2px;"),
+      p("Benjamin Lagable  |  Méthode OCDE/JRC (2008)",
+        style = "color:#777; font-size:12px; margin:0;")
+    )
+  ),
+
+  tabsetPanel(id = "onglets",
+
+    tabPanel("Carte interactive",
+      br(),
+      fluidRow(
+        column(4,
+          div(class = "sidebar-panel",
+            selectInput("variable", "Indicateur :",
+                        choices  = setNames(names(labels_sous_indices), labels_sous_indices),
+                        selected = "score_global", width = "100%"),
+            div(class = "description-box", textOutput("description")),
+            div(class = "score-box",
+              p("Score moyen national :", style = "margin:0 0 2px 0; font-size:12px; color:#666;"),
+              span(class = "score-value", textOutput("moyenne_sous_indice")),
+              span(" / 100", style = "color:#999; font-size:14px;")
+            ),
+            div(class = "corr-box",
+              p(tags$strong("Lien avec les créations d'entreprises :"),
+                style = "margin:0 0 4px 0; font-size:12px; color:#333;"),
+              uiOutput("correlation_creations"),
+              p("Corrélation de Pearson entre cet indicateur et le nombre de créations
+                (standardisé) — 306 zones d'emploi.",
+                style = "margin:6px 0 0 0; font-size:11px; color:#888; font-style:italic;")
+            ),
+            div(class = "warning-box",
+              tags$strong("Note : "),
+              "Scores normalisés 0-100. Un score supérieur à 50 indique une position
+               au-dessus de la médiane nationale. Ces scores sont descriptifs."
+            )
+          )
+        ),
+        column(8, leafletOutput("map", height = "calc(100vh - 180px)"))
+      )
+    ),
+
+    tabPanel("Distribution et corrélations",
+      br(),
+      fluidRow(column(12, div(class = "section-box",
+        h4("Distribution nationale de l'indicateur sélectionné"),
+        p("Répartition des 306 zones d'emploi. Médiane en rouge, quartiles Q1/Q3 en orange.",
+          style = "font-size:13px; color:#555;"),
+        plotOutput("distribution", height = "300px")
+      ))),
+      br(),
+      fluidRow(column(12, div(class = "section-box",
+        h4("Corrélation des scores ACP avec le nombre de créations d'entreprises"),
+        div(class = "warning-box",
+          tags$strong("Note : "),
+          "Corrélations de Pearson — corrélations descriptives uniquement,
+           aucune inférence causale. Validation externe conformément à OCDE/JRC 2008, ch. 7.
+           Les dimensions Fiscalité (r = -0.567) et Logement (r = -0.458) présentent
+           une corrélation négative — voir onglet Méthodologie."
+        ),
+        plotOutput("corr_plot", height = "340px")
+      )))
+    ),
+
+    tabPanel("Profil territorial",
+      br(),
+      fluidRow(
+        column(4, div(class = "sidebar-panel",
+          h4("Zone d'emploi"),
+          selectInput("zone_profil", NULL,
+                      choices = sort(data_scores$LIBZE2020), selected = "Paris"),
+          hr(),
+          h4("Scores et rangs nationaux"),
+          tableOutput("table_scores"),
+          div(class = "note-methodo", "Rang calculé sur 306 zones d'emploi. Rang 1 = score le plus élevé.")
+        )),
+        column(8, div(class = "section-box",
+          h4(textOutput("titre_radar")),
+          plotOutput("radar_plot", height = "460px"),
+          div(class = "note-methodo",
+            "Bleu : profil de la zone. Gris : médiane nationale. Scores ACP normalisés 0-100.
+             Les dimensions Fiscalité et Logement présentent une corrélation négative
+             avec les créations — voir Méthodologie.")
+        ))
+      )
+    ),
+
+    tabPanel("Classement",
+      br(),
+      fluidRow(
+        column(3, div(class = "sidebar-panel",
+          h4("Paramètres"),
+          selectInput("dim_classement", "Dimension :",
+                      choices  = setNames(names(labels_sous_indices), labels_sous_indices),
+                      selected = "score_global"),
+          radioButtons("sens_classement", "Afficher :",
+                       choices = c("Top 20" = "top", "Flop 20" = "flop"), selected = "top"),
+          hr(),
+          div(class = "note-methodo", "Classement parmi les 306 zones d'emploi ZE2020. Scores ACP normalisés 0-100.")
+        )),
+        column(9, div(class = "section-box",
+          h4(textOutput("titre_classement")),
+          plotOutput("classement_plot", height = "540px")
+        ))
+      )
+    ),
+
+    tabPanel("Méthodologie",
+      br(),
+      div(class = "methodologie-section",
+        h3("Construction de l'indice composite"),
+        p(tags$b("Référence : "), "OCDE/JRC (2008). Handbook on Constructing Composite Indicators.",
+          tags$a("doi.org/10.1787/9789264043466-en",
+            href = "https://doi.org/10.1787/9789264043466-en", target = "_blank")),
+        h4("Étapes de construction"),
+        tags$ol(
+          tags$li(tags$b("Standardisation préalable (mean = 0, sd = 1)"), " — OCDE/JRC 2008, section 5."),
+          tags$li(tags$b("ACP par dimension thématique (9 dimensions) :"),
+            " extraction du PC1, orienté par une variable d'ancrage choisie a priori — OCDE/JRC 2008, section 6.2."),
+          tags$li(tags$b("Normalisation min-max 0-100"), " — OCDE/JRC 2008, équation 6.1."),
+          tags$li(tags$b("Indice global — moyenne simple des 9 scores"), " — OCDE/JRC 2008, section 7.2.")
+        ),
+        h4("Robustesse"),
+        p("Corrélation de rang de Spearman entre pondération égale et pondération par variance
+          expliquée PC1 : rho = 0.971 (OCDE/JRC 2008, ch. 8). L'indice est robuste aux choix
+          de pondération."),
+        h4("Validation externe"),
+        p("Le nombre de créations d'entreprises est exclu de la construction et utilisé uniquement
+          en corrélation descriptive a posteriori (OCDE/JRC 2008, ch. 7). Corrélation indice global /
+          créations : r = 0.475 (Pearson), rho = 0.427 (Spearman) — 306 zones d'emploi."),
+        h4("Limites assumées"),
+        tags$ul(
+          tags$li(tags$b("Fiscalité et ressources publiques"), " (r = -0.567) et ",
+            tags$b("Logement et cadre résidentiel"), " (r = -0.458) : corrélations négatives
+             avec les créations. Profils territoriaux distincts — variables d'orientation non
+             modifiées a posteriori (OCDE/JRC 2008, ch. 6)."),
+          tags$li("Fiscalité (PC1 = 21%) et Environnement (PC1 = 25%) : faible cohérence interne."),
+          tags$li("Sources : INSEE, Observatoire des territoires, ANCT. Période 2021-2024. 306 zones d'emploi ZE2020.")
+        )
+      )
+    )
+  )
+)
+
+# -----------------------------------------------------------------------------
+# 3. Server
+# -----------------------------------------------------------------------------
+
+server <- function(input, output, session) {
+
+  values_to_plot <- reactive({
+    as.numeric(fond_carte_data[[input$variable]])
+  })
+
+  output$description <- renderText({
+    desc <- descriptions[[input$variable]]
+    if (is.null(desc)) "Description non disponible." else desc
+  })
+
+  output$moyenne_sous_indice <- renderText({
+    vals <- values_to_plot()
+    if (length(vals) > 0) round(mean(vals, na.rm = TRUE), 1) else "N/A"
+  })
+
+  output$correlation_creations <- renderUI({
+    r <- corr_creations[[input$variable]]
+    if (is.null(r) || is.na(r)) return(p("Non disponible", style = "color:#888;"))
+    css_class <- if (r > 0.2) "corr-positive" else if (r < -0.1) "corr-negative" else "corr-neutral"
+    direction <- if (r > 0) "positive" else "négative"
+    intensite <- if (abs(r) > 0.4) "modérée à forte" else if (abs(r) > 0.2) "faible à modérée" else "très faible"
+    HTML(paste0("<span class='", css_class, "'>r = ", sprintf("%.3f", r), "</span>",
+                " — corrélation ", direction, " ", intensite, "."))
+  })
+
+  output$map <- renderLeaflet({
+    vals         <- values_to_plot()
+    label_indice <- labels_sous_indices[[input$variable]]
+    pal          <- colorQuantile("RdYlGn", vals, n = 4, na.color = "#cccccc")
+    q            <- quantile(vals, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+    quartile_label <- ifelse(is.na(vals), "Données manquantes",
+                      ifelse(vals >= q[3], "Quartile supérieur (Q4)",
+                      ifelse(vals >= q[2], "3e quartile (Q3)",
+                      ifelse(vals >= q[1], "2e quartile (Q2)",
+                                           "Quartile inférieur (Q1)"))))
+
+    leaflet(fond_carte_data) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addPolygons(
+        fillColor   = ~pal(vals),
+        weight      = 0.8,
+        opacity     = 0.9,
+        color       = "white",
+        fillOpacity = 0.78,
+        highlight   = highlightOptions(
+          weight = 2, color = "#333333", fillOpacity = 0.92, bringToFront = TRUE
+        ),
+        label = ~lapply(paste0(
+          "<strong>", LIBZE2020, "</strong><br>",
+          label_indice, " : <strong>",
+          ifelse(is.na(vals), "N/A", round(vals, 1)), " / 100</strong><br>",
+          "<em style='color:#666666;'>", quartile_label, "</em>"
+        ), htmltools::HTML),
+        labelOptions = labelOptions(
+          style    = list("font-weight" = "normal", padding = "6px 10px"),
+          textsize = "13px", direction = "auto"
+        )
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        colors   = c("#1a9641", "#a6d96a", "#fdae61", "#d7191c"),
+        labels   = c("Q4 — Quartile supérieur", "Q3 — 3e quartile",
+                     "Q2 — 2e quartile",        "Q1 — Quartile inférieur"),
+        title    = label_indice, opacity = 0.85
+      ) %>%
+      fitBounds(lng1 = -5.5, lat1 = 41.2, lng2 = 9.8, lat2 = 51.2)
+  })
+
+  output$distribution <- renderPlot({
+    vals    <- values_to_plot()
+    med     <- median(vals, na.rm = TRUE)
+    q1      <- quantile(vals, 0.25, na.rm = TRUE)
+    q3      <- quantile(vals, 0.75, na.rm = TRUE)
+    label_i <- labels_sous_indices[[input$variable]]
+
+    ggplot(data.frame(score = vals[!is.na(vals)]), aes(x = score)) +
+      geom_histogram(bins = 30, fill = "#4a90d9", color = "white", alpha = 0.85) +
+      geom_vline(xintercept = med, color = "red3",    linewidth = 1) +
+      geom_vline(xintercept = q1,  color = "orange2", linewidth = 0.8, linetype = "dashed") +
+      geom_vline(xintercept = q3,  color = "orange2", linewidth = 0.8, linetype = "dashed") +
+      annotate("text", x = med, y = Inf, label = paste0("Médiane : ", round(med, 1)),
+               vjust = 2, hjust = -0.1, color = "red3", size = 3.5) +
+      annotate("text", x = q1, y = Inf, label = paste0("Q1 : ", round(q1, 1)),
+               vjust = 2, hjust = 1.1, color = "orange2", size = 3) +
+      annotate("text", x = q3, y = Inf, label = paste0("Q3 : ", round(q3, 1)),
+               vjust = 2, hjust = -0.1, color = "orange2", size = 3) +
+      labs(title = paste("Distribution —", label_i), x = "Score (0-100)", y = "Zones d'emploi") +
+      theme_minimal(base_size = 12) +
+      theme(plot.title = element_text(size = 13, face = "bold", color = "gray10"))
+  })
+
+  output$corr_plot <- renderPlot({
+    corr_df <- data.frame(
+      sous_indice = names(corr_creations),
+      correlation = as.numeric(corr_creations)
+    )
+    corr_df$label   <- labels_sous_indices[corr_df$sous_indice]
+    corr_df         <- corr_df[!is.na(corr_df$correlation), ]
+    corr_df$couleur <- ifelse(corr_df$correlation > 0, "#2166AC", "#B2182B")
+    corr_df$label   <- factor(corr_df$label, levels = corr_df$label[order(corr_df$correlation)])
+
+    ggplot(corr_df, aes(x = correlation, y = label, fill = couleur)) +
+      geom_col(width = 0.6, show.legend = FALSE) +
+      geom_vline(xintercept = 0, color = "gray30", linewidth = 0.5) +
+      geom_text(aes(label = sprintf("r = %.3f", correlation),
+                    hjust = ifelse(correlation >= 0, -0.1, 1.1)),
+                size = 3.2, color = "gray20") +
+      scale_fill_identity() +
+      scale_x_continuous(limits = c(-0.75, 0.85), expand = c(0, 0)) +
+      labs(title = "Corrélation de Pearson entre chaque score ACP et le nombre de créations d'entreprises",
+           subtitle = "Corrélations descriptives — 306 zones d'emploi (ZE2020). Aucune inférence causale.",
+           x = "Corrélation (r)", y = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(plot.title    = element_text(size = 11, face = "bold", color = "gray10"),
+            plot.subtitle = element_text(size = 9, color = "gray40"),
+            axis.text.y   = element_text(size = 10))
+  })
+
+  zone_data <- reactive({
+    data_scores %>% filter(LIBZE2020 == input$zone_profil)
+  })
+
+  output$titre_radar <- renderText({ paste("Profil territorial —", input$zone_profil) })
+
+  output$table_scores <- renderTable({
+    z      <- zone_data()
+    scores <- round(as.numeric(sapply(cols_dim, function(d) z[[d]])), 1)
+    rangs  <- sapply(cols_dim, function(d) {
+      rank(-data_scores[[d]], ties.method = "min")[data_scores$LIBZE2020 == input$zone_profil]
+    })
+    rang_g <- rank(-data_scores$score_global, ties.method = "min")[
+      data_scores$LIBZE2020 == input$zone_profil]
+    data.frame(
+      Dimension   = c(as.character(labels_radar[cols_dim]), "Indice global"),
+      Score       = c(scores, round(as.numeric(z$score_global), 1)),
+      `Rang /306` = c(rangs, rang_g),
+      check.names = FALSE
+    )
+  }, striped = TRUE, hover = TRUE, spacing = "s", digits = 1)
+
+  output$radar_plot <- renderPlot({
+    z       <- zone_data()
+    scores  <- as.numeric(sapply(cols_dim, function(d) z[[d]]))
+    medians <- sapply(cols_dim, function(d) median(data_scores[[d]], na.rm = TRUE))
+    labels  <- as.character(labels_radar[cols_dim])
+    n       <- length(cols_dim)
+    angles  <- seq(0, 2 * pi, length.out = n + 1)[-(n + 1)]
+
+    to_xy <- function(vals, angs) data.frame(
+      x = (vals / 100) * cos(angs - pi / 2),
+      y = (vals / 100) * sin(angs - pi / 2)
+    )
+
+    zone_xy   <- to_xy(c(scores,  scores[1]),  c(angles, angles[1]))
+    median_xy <- to_xy(c(medians, medians[1]), c(angles, angles[1]))
+    label_xy  <- to_xy(rep(120, n), angles)
+    label_xy$label <- labels
+
+    grille_df <- do.call(rbind, lapply(c(25, 50, 75, 100), function(v) {
+      xy <- to_xy(rep(v, n + 1), c(angles, angles[1])); xy$niveau <- v; xy
+    }))
+    axes_df <- data.frame(x = cos(angles - pi/2), y = sin(angles - pi/2), xend = 0, yend = 0)
+
+    ggplot() +
+      geom_path(data = grille_df, aes(x = x, y = y, group = niveau),
+                color = "gray85", linewidth = 0.35) +
+      geom_segment(data = axes_df, aes(x = x, y = y, xend = xend, yend = yend),
+                   color = "gray75", linewidth = 0.4) +
+      geom_polygon(data = median_xy, aes(x = x, y = y),
+                   fill = "gray60", alpha = 0.18, color = "gray55", linewidth = 0.7) +
+      geom_polygon(data = zone_xy, aes(x = x, y = y),
+                   fill = "#2166AC", alpha = 0.30, color = "#2166AC", linewidth = 1.1) +
+      geom_point(data = to_xy(scores, angles), aes(x = x, y = y),
+                 color = "#2166AC", size = 2.8) +
+      geom_text(data = label_xy, aes(x = x, y = y, label = label),
+                size = 3, lineheight = 0.88, color = "gray15") +
+      annotate("text", x = 0, y = -0.2,
+               label = paste0("Indice global\n", round(as.numeric(z$score_global), 1), " / 100"),
+               size = 3.2, color = "#1a1a2e", fontface = "bold", hjust = 0.5) +
+      coord_fixed(xlim = c(-1.35, 1.35), ylim = c(-1.35, 1.35)) +
+      theme_void() +
+      labs(subtitle = "Bleu : zone sélectionnée  |  Gris : médiane nationale") +
+      theme(plot.subtitle = element_text(size = 9, color = "gray50", hjust = 0.5),
+            plot.margin   = margin(10, 10, 10, 10))
+  })
+
+  # ---- Onglet 4 : Classement ----
+  # Bug corrigé : unname() sur le label du titre pour éviter [object Object]
+
+  output$titre_classement <- renderText({
+    sens      <- if (input$sens_classement == "top") "Top 20" else "Flop 20"
+    dim_label <- unname(labels_sous_indices[input$dim_classement])
+    paste(sens, "-", dim_label)
+  })
+
+  output$classement_plot <- renderPlot({
+    var_col <- input$dim_classement
+
+    df <- data_scores %>%
+      select(LIBZE2020, valeur = all_of(var_col)) %>%
+      arrange(if (input$sens_classement == "top") desc(valeur) else valeur) %>%
+      slice(1:20) %>%
+      mutate(
+        LIBZE2020 = factor(
+          LIBZE2020,
+          levels = if (input$sens_classement == "top")
+            LIBZE2020[order(valeur)] else LIBZE2020[order(desc(valeur))]
+        ),
+        couleur = if (input$sens_classement == "top") "#2166AC" else "#B2182B"
+      )
+
+    ggplot(df, aes(x = valeur, y = LIBZE2020, fill = couleur)) +
+      geom_col(width = 0.72, show.legend = FALSE) +
+      geom_text(aes(label = round(valeur, 1), hjust = -0.15), size = 3.3, color = "gray20") +
+      scale_fill_identity() +
+      scale_x_continuous(limits = c(0, 108), expand = c(0, 0)) +
+      labs(x = "Score (0-100)", y = NULL,
+           caption = "OCDE/JRC (2008). Scores ACP normalisés min-max. 306 zones d'emploi ZE2020.") +
+      theme_minimal(base_size = 11) +
+      theme(axis.text.y        = element_text(size = 10.5, color = "gray10"),
+            plot.caption       = element_text(size = 8, color = "gray50", hjust = 0),
+            panel.grid.major.y = element_blank())
+  })
+}
+
+shinyApp(ui, server)

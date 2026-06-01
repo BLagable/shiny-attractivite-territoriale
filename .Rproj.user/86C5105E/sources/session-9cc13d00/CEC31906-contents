@@ -1,0 +1,131 @@
+# Attractivité territoriale des zones d'emploi françaises (ZE2020)
+**Auteur :** Benjamin Lagable — Bpifrance / Observatoire de la Création d'Entreprise  
+**Données :** INSEE, DGFIP, ADEME, ANCT, ARCEP (millésimes 2021-2024)  
+**Maille :** 306 zones d'emploi françaises (ZE2020)  
+**Référence méthodologique :** OCDE/JRC (2008). *Handbook on Constructing Composite Indicators*. OECD Publishing. https://doi.org/10.1787/9789264043466-en
+
+---
+
+## Présentation
+
+Cette application cartographie l'attractivité territoriale des 306 zones d'emploi françaises à travers neuf dimensions thématiques et un indice global composite. Elle est issue d'un travail de recherche conduit au sein de l'Observatoire de la Création d'Entreprise (OCE) de Bpifrance.
+
+L'outil permet de visualiser le positionnement relatif de chaque zone d'emploi sur chaque dimension, d'explorer la distribution nationale des scores, et de documenter les corrélations descriptives entre ces dimensions et la dynamique de création d'entreprises.
+
+---
+
+## Méthode de construction des indices
+
+### Référence
+
+La méthode suit les recommandations du manuel OCDE/JRC (2008), qui constitue la référence standard pour la construction d'indices composites dans le champ des politiques publiques et de l'analyse territoriale.
+
+### Données source
+
+Le fichier `data_retraited.xlsx` contient 306 observations (zones d'emploi) et 70 variables numériques, toutes **standardisées** (mean = 0, std = 1) en amont. Aucune valeur manquante.
+
+La variable `nombre_creations` (nombre de créations d'entreprises, standardisée) est **exclue de la construction des indices**. Elle sert uniquement à documenter les corrélations descriptives a posteriori, conformément au principe de séparation entre construction de l'indice et validation externe (OCDE/JRC 2008, ch. 7).
+
+### Étape 1 — ACP par dimension thématique
+
+Pour chaque dimension, le **premier composant principal (PC1)** est extrait par ACP. Le PC1 est la combinaison linéaire des variables qui maximise la variance expliquée au sein de la dimension — les pondérations sont donc **empiriques et objectives**, issues de la structure de covariance des données.
+
+Les données étant déjà standardisées, l'ACP est appliquée sans recentrage ni réduction supplémentaire (`prcomp(X, center = FALSE, scale. = FALSE)`).
+
+**Orientation du PC1 (OCDE/JRC 2008, section 6.2) :**  
+Le signe du PC1 est mathématiquement arbitraire — l'algorithme peut retourner le même axe avec tous les signes inversés. Pour donner un sens interprétable au score, on oriente le PC1 par rapport au **loading de la variable dominante** de chaque dimension : si cette variable a un loading négatif sur PC1, on multiplie le PC1 par -1. La variable dominante est choisie a priori pour chaque dimension selon son sens substantiel (ex. "Taux d'activité des 15-64 ans" pour la dimension dynamisme économique).
+
+Cette orientation est une **convention de lecture** — elle ne modifie pas la structure des données ni les pondérations.
+
+**Normalisation (OCDE/JRC 2008, eq. 6.1) :**  
+Chaque score est normalisé entre 0 et 100 par transformation min-max :
+
+$$\text{score}_{i} = \frac{x_i - \min(x)}{\max(x) - \min(x)} \times 100$$
+
+Un score de 100 correspond à la zone la plus favorable sur la dimension considérée ; un score de 0 à la moins favorable.
+
+### Étape 2 — Indice global
+
+L'indice global est la **moyenne simple des 9 scores dimensionnels normalisés**.
+
+Ce choix est justifié par l'absence de raison théorique solide pour pondérer différemment les neuf dimensions entre elles. La moyenne simple est la méthode par défaut recommandée par OCDE/JRC 2008 (section 7.2) dans ce cas. Elle présente l'avantage d'être transparente, reproductible, et ses propriétés sont bien documentées dans la littérature.
+
+### Résultats de la construction
+
+| Dimension | N variables | Var. exp. PC1 | r (créations) |
+|---|:---:|:---:|:---:|
+| Dynamisme économique et emploi | 9 | 33,6% | 0,482 |
+| Fiscalité et ressources publiques | 9 | 21,0% | 0,567 |
+| Capital humain et éducation | 6 | 50,9% | 0,217 |
+| Services, équipements et qualité de vie | 11 | 40,0% | 0,363 |
+| Démographie et structure sociale | 7 | 33,0% | 0,306 |
+| Logement et cadre résidentiel | 5 | 42,3% | 0,458 |
+| Environnement et risques | 12 | 25,9% | 0,670 |
+| Infrastructures numériques | 3 | 57,1% | 0,115 |
+| Mobilité et accessibilité | 4 | 42,6% | 0,503 |
+| **Indice global** | — | — | **0,713** |
+
+La variance expliquée par le PC1 varie de 21% à 57% selon les dimensions. Les dimensions à faible variance expliquée (fiscalité, environnement) sont structurellement hétérogènes — leurs indicateurs mesurent des réalités peu corrélées entre elles. Les scores correspondants doivent être interprétés avec plus de prudence.
+
+---
+
+## Corrélations avec la création d'entreprises
+
+Les corrélations entre les scores dimensionnels et `nombre_creations` sont présentées à titre **strictement descriptif**. Elles quantifient le lien statistique entre chaque dimension de l'attractivité territoriale et la dynamique entrepreneuriale observée, sans permettre d'inférer une relation causale.
+
+Deux raisons principales expliquent pourquoi la causalité n'est pas identifiable ici :
+
+1. **Endogénéité structurelle :** les zones à fort dynamisme entrepreneurial tendent à accumuler des ressources (services, équipements, capital humain, revenus) qui sont elles-mêmes des composantes de l'indice. La causalité est bidirectionnelle.
+
+2. **Absence de stratégie d'identification :** sans variable instrumentale, discontinuité géographique ou données de panel longues, il n'est pas possible d'isoler l'effet causal des caractéristiques territoriales sur la création d'entreprises.
+
+**Résultat notable :** la dimension "infrastructures numériques" présente la corrélation la plus faible avec les créations (r = 0,115). Ce résultat suggère que la connectivité numérique ne discrimine pas les zones d'emploi selon leur dynamisme entrepreneurial à l'échelle considérée — résultat en soi informatif pour les politiques publiques.
+
+---
+
+## Sources de données
+
+| Source | Variables couvertes | Millésime |
+|---|---|:---:|
+| INSEE | Démographie, emploi, logement, revenus, équipements | 2021-2022 |
+| DGFIP | Fiscalité locale, finances des collectivités | 2021-2022 |
+| ADEME | Émissions de GES, qualité de l'air | 2021 |
+| ANCT | Équipements territoriaux, QPV | 2024 |
+| IGN | Fond de carte ZE2020 | 2020 |
+| ARCEP | Couverture 4G, fibre optique | 2022-2024 |
+| ARS | Densité de l'offre de soins | 2022 |
+
+---
+
+## Limites
+
+- Les scores sont construits à des fins **descriptives et comparatives**, pas prédictives.
+- La **moyenne simple** comme méthode d'agrégation implique un poids égal entre les neuf dimensions — choix normatif transparent, mais discutable si l'on considère que certaines dimensions sont plus déterminantes que d'autres pour l'attractivité entrepreneuriale.
+- La **corrélation élevée** de la dimension "environnement/risques" avec les créations (r = 0,67) est principalement portée par les variables de ruralité (surface agricole, territoires agricoles) — elle reflète une réalité structurelle opposant zones rurales et urbaines, pas un lien direct entre qualité environnementale et entrepreneuriat.
+- Les scores reflètent une **situation à un instant donné** et évolueront avec les millésimes de données.
+- Certaines zones, notamment ultramarines, peuvent présenter des profils atypiques non capturés par les dimensions définies.
+
+---
+
+## Reproductibilité
+
+Le script `construction_indices_ACP.R` repart intégralement de `data_retraited.xlsx` et produit tous les scores (`data/data_scores_ACP.xlsx`) et figures (`figures/`).
+
+**Packages R requis :** `readxl`, `dplyr`, `ggplot2`, `openxlsx`, `tidyr`
+
+```
+shiny-attractivite-territoriale/
+├── app.R
+├── construction_indices_ACP.R
+├── README_shiny.md
+├── data/
+│   ├── data_retraited.xlsx
+│   ├── data_scores_ACP.xlsx
+│   └── ze2020_2024.shp (.dbf .shx .prj .cpg)
+└── figures/
+    ├── correlations_scores_creations.png
+    ├── variance_expliquee_pc1.png
+    ├── distribution_score_global.png
+    ├── scatter_global_creations.png
+    └── loadings_*.png
+```
